@@ -986,6 +986,33 @@ class InterpolationOperator(NumpyMatrixBasedOperator):
         return self.function.evaluate(self.grid.centers(self.grid.dim), mu=mu).reshape((-1, 1))
 
 
+class BoundaryInterpolationOperator(InterpolationOperator):
+    """|InterpolationOperator| restricted to a part of the boundary..
+
+    Parameters
+    ----------
+    grid
+        The |Grid| on which to interpolate.
+    function
+        The |Function| to interpolate.
+    boundary_info
+        The |BoundaryInfo| defining the physical boundary (has to match grid).
+    boundary_type
+        The type of the physical boundary.
+    """
+
+    def __init__(self, grid, function, boundary_info, boundary_type='dirichlet'):
+        super().__init__(grid, function)
+        self.__auto_init(locals())
+        self.boundary_mask = boundary_info.boundaries(boundary_type, grid.dim)
+
+    def _assemble(self, mu=None):
+        result = np.zeros(self.range.dim)
+        interpolation = super()._assemble(mu=mu)
+        result[self.boundary_mask] = interpolation[self.boundary_mask].ravel()
+        return result.reshape((-1, 1))
+
+
 def discretize_stationary_cg(analytical_problem, diameter=None, domain_discretizer=None,
                              grid_type=None, grid=None, boundary_info=None,
                              preassemble=True, energy_product=None):
