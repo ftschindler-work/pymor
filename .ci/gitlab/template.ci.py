@@ -81,7 +81,7 @@ pages:
 # should become available with gitlab 12.7 (Jan. 17)
     extends: .docker-in-docker
     stage: deploy
-    depends: build:pages
+    dependencies: build_pages
     variables:
         IMAGE: ${CI_REGISTRY_IMAGE}/docs:latest
     script:
