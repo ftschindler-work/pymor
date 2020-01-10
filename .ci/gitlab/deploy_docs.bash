@@ -26,8 +26,9 @@ rm -rf ${PUBLIC_DIR}/${CI_COMMIT_REF_SLUG}/
 
 # docs/_build/html/ is unzipped from an CI artefact
 rsync -a docs/_build/html/ ${PUBLIC_DIR}/${CI_COMMIT_REF_SLUG}/
-cp -r docs/public_root/* ${PUBLIC_DIR}
+cp -r docs/public_root/* ${PUBLIC_DIR}/
 du -sch ${PUBLIC_DIR}/*
+ls ${PUBLIC_DIR}/ > ${PUBLIC_DIR}/list.html
 docker build -t ${IMAGE} -f .ci/docker/docs/Dockerfile ${PUBLIC_DIR}
 docker push ${IMAGE}
 # for automatic deploy gitlab uses ${PROJECT_DIR}/public
