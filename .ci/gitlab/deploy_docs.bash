@@ -14,9 +14,6 @@ cd "${PYMOR_ROOT}"
 # any failure here should fail the whole test
 set -eux
 
-export USER=pymor
-make dockerdocs
-
 docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
 docker pull ${IMAGE}
 container=$(docker create --entrypoint / ${IMAGE})
@@ -27,6 +24,7 @@ docker cp ${container}:/public/ ${PUBLIC_DIR}/
 du -sch ${PUBLIC_DIR}/*
 rm -rf ${PUBLIC_DIR}/${CI_COMMIT_REF_SLUG}/
 
+# docs/_build/html/ is unzipped from an CI artefact
 rsync -a docs/_build/html/ ${PUBLIC_DIR}/${CI_COMMIT_REF_SLUG}/
 cp -r docs/public_root/* ${PUBLIC_DIR}
 du -sch ${PUBLIC_DIR}/*

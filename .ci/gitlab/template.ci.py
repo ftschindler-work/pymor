@@ -59,11 +59,29 @@ minimal_cpp_demo:
     stage: test
     script: ./.ci/gitlab/cpp_demo.bash
 
+build_pages:
+    extends: .docker-in-docker
+    stage: test
+    script:
+        - apk --update add make
+        - .ci/gitlab/deploy_docs.bash
+
+    # only:
+    #   - master
+    #   - tags
+    artifacts:
+        paths:
+            - docs/_build/html/
+    script:
+        - apk --update add make
+        - .ci/gitlab/build_docs.bash
+
 pages:
 # this needs to use a semaphore to avoid races on the docker images
-# should become available with gitlab 12.6 (Dez. 17)
+# should become available with gitlab 12.7 (Jan. 17)
     extends: .docker-in-docker
     stage: deploy
+    depends: build:pages
     variables:
         IMAGE: ${CI_REGISTRY_IMAGE}/docs:latest
     script:
