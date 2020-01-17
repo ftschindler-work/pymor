@@ -290,7 +290,7 @@ def plot_reduction_error_analysis(result, max_basis_size=None, plot_custom_logar
     custom_values = result['custom_values']
     custom_names = result['custom_names']
 
-    max_basis_size = uax_basis_size if max_basis_size else len(basis_sizes)
+    max_basis_size = max_basis_size if max_basis_size else len(basis_sizes)
 
     import matplotlib.pyplot as plt
     fig = plt.figure()
