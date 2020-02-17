@@ -105,10 +105,27 @@ class Model(CacheableObject, Parametric):
         -------
         The estimated error.
         """
-        if getattr(self, 'estimator') is not None:
+        if getattr(self, 'estimator') is not None and hasattr(self.estimator, 'estimate'):
             return self.estimator.estimate(U, mu=mu, m=self)
         else:
             raise NotImplementedError('Model has no estimator.')
+
+    def output_error(self, mu=None):
+        """Estimate the model output error for a given |Parameter| `mu`.
+
+        Parameters
+        ----------
+        mu
+            |Parameter| for which the output has been computed.
+
+        Returns
+        -------
+        The estimated error.
+        """
+        if getattr(self, 'estimator') is not None and hasattr(self.estimator, 'output_error'):
+            return self.estimator.output_error(mu=mu, m=self)
+        else:
+            raise NotImplementedError('Model has no output estimator.')
 
     def visualize(self, U, **kwargs):
         """Visualize a solution |VectorArray| U.

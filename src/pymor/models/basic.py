@@ -43,9 +43,11 @@ class StationaryModel(Model):
         The |ParameterSpace| for which the discrete problem is posed.
     estimator
         An error estimator for the problem. This can be any object with
-        an `estimate(U, mu, m)` method. If `estimator` is
-        not `None`, an `estimate(U, mu)` method is added to the
-        model which will call `estimator.estimate(U, mu, self)`.
+        an `estimate(U, mu, m)` and/or `output_error(mu, m)` method.
+        If `estimator` is not `None`, an `estimate(U, mu)` method is
+        added to the model which will call `estimator.estimate(U, mu, self)`
+        and an `output_error(mu)` method is added to the model which will
+        call estimator.output_error(mu, self)`.
     visualizer
         A visualizer for the problem. This can be any object with
         a `visualize(U, m, ...)` method. If `visualizer`
@@ -148,9 +150,11 @@ class InstationaryModel(Model):
         The |ParameterSpace| for which the discrete problem is posed.
     estimator
         An error estimator for the problem. This can be any object with
-        an `estimate(U, mu, m)` method. If `estimator` is
-        not `None`, an `estimate(U, mu)` method is added to the
-        model which will call `estimator.estimate(U, mu, self)`.
+        an `estimate(U, mu, m)` and/or `output_error(mu, m)` method.
+        If `estimator` is not `None`, an `estimate(U, mu)` method is
+        added to the model which will call `estimator.estimate(U, mu, self)`
+        and an `output_error(mu)` method is added to the model which will
+        call estimator.output_error(mu, self)`.
     visualizer
         A visualizer for the problem. This can be any object with
         a `visualize(U, m, ...)` method. If `visualizer`
