@@ -142,14 +142,14 @@ class WeakGreedySurrogate(BasicInterface):
         pass
 
 
-def rb_greedy(fom, reductor, training_set, use_estimator=True, error_norm=None,
+def rb_greedy(fom, reductor, training_set, use_estimator='STATE', error_norm=None,
               atol=None, rtol=None, max_extensions=None, extension_params=None, pool=None):
     """Weak Greedy basis generation using the RB approximation error as surrogate.
 
     This algorithm generates a reduced basis using the :func:`weak greedy <weak_greedy>`
     algorithm [BCDDPW11]_, where the approximation error is estimated from computing
     solutions of the reduced order model for the current reduced basis and then estimating
-    the model reduction error.
+    the model reduction state or output error.
 
     Parameters
     ----------
@@ -165,12 +165,14 @@ def rb_greedy(fom, reductor, training_set, use_estimator=True, error_norm=None,
     training_set
         The training set of |Parameters| on which to perform the greedy search.
     use_estimator
-        If `False`, exactly compute the model reduction error by also computing
-        the solution of `fom` for each training set |Parameter|. This is mainly
-        useful when no estimator for the model reduction error is available.
+        If `'STATE'`, uses the estimate on the model reduction error, if `'OUTPUT'`,
+        uses the estimate on the output error. If neither, exactly computes the
+        model reduction error by also computing the solution of `fom` for each
+        training set |Parameter|. This is mainly useful when no estimator for the
+        model reduction error is available.
     error_norm
-        If `use_estimator` is `False`, use this function to calculate the
-        norm of the error. If `None`, the Euclidean norm is used.
+        If `use_estimator` is neither `'STATE'` nor `'OUTPUT'`, use this function to
+        calculate the norm of the error. If `None`, the Euclidean norm is used.
     atol
         See :func:`weak_greedy`.
     rtol
@@ -214,7 +216,7 @@ class RBSurrogate(WeakGreedySurrogate):
 
     def __init__(self, fom, reductor, use_estimator, error_norm, extension_params, pool):
         self.__auto_init(locals())
-        if use_estimator:
+        if use_estimator in ('STATE', 'OUTPUT'):
             self.remote_fom, self.remote_error_norm, self.remote_reductor = None, None, None
         else:
             self.remote_fom, self.remote_error_norm, self.remote_reductor = \
@@ -231,6 +233,7 @@ class RBSurrogate(WeakGreedySurrogate):
 
         result = self.pool.apply(_rb_surrogate_evaluate,
                                  rom=self.rom,
+                                 estimator=self.use_estimator,
                                  fom=self.remote_fom,
                                  reductor=self.remote_reductor,
                                  mus=mus,
@@ -257,7 +260,7 @@ class RBSurrogate(WeakGreedySurrogate):
             self.rom = self.reductor.reduce()
 
 
-def _rb_surrogate_evaluate(rom=None, fom=None, reductor=None, mus=None, error_norm=None, return_all_values=False):
+def _rb_surrogate_evaluate(rom=None, estimator=None, fom=None, reductor=None, mus=None, error_norm=None, return_all_values=False):
     if not mus:
         if return_all_values:
             return []
@@ -265,7 +268,11 @@ def _rb_surrogate_evaluate(rom=None, fom=None, reductor=None, mus=None, error_no
             return -1., None
 
     if fom is None:
-        errors = [rom.estimate(rom.solve(mu), mu) for mu in mus]
+        assert estimator in ('STATE', 'OUTPUT')
+        if estimator == 'STATE':
+            errors = [rom.estimate(rom.solve(mu), mu) for mu in mus]
+        else:
+            errors = [rom.output_error(mu) for mu in mus]
     elif error_norm is not None:
         errors = [error_norm(fom.solve(mu) - reductor.reconstruct(rom.solve(mu))) for mu in mus]
     else:
