@@ -95,6 +95,20 @@ class ModelInterface(CacheableInterface, Parametric):
         """
         raise NotImplementedError
 
+    def output_error(self, mu=None):
+        """Estimate the model output error for a given |Parameter| `mu`.
+
+        Parameters
+        ----------
+        mu
+            |Parameter| for which the output has been computed.
+
+        Returns
+        -------
+        The estimated error.
+        """
+        raise NotImplementedError
+
     def visualize(self, U, **kwargs):
         """Visualize a solution |VectorArray| U.
 
