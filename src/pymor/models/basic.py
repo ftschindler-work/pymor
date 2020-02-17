@@ -79,6 +79,10 @@ class StationaryModel(ModelBase):
         |Operator| mapping a given solution to the model output. In many applications,
         this will be a |Functional|, i.e. an |Operator| mapping to scalars.
         This is not required, however.
+    output_function
+        Callable of the form `value = output_function(U, mu)`. If specified, `value` is
+        returned in `solve` as output, even if `output_functional != None`.
+        This is mainly intended for corrected outputs of reduced models.
     products
         A dict of inner product |Operators| defined on the discrete space the
         problem is posed on. For each product with key `'x'` a corresponding
@@ -103,8 +107,8 @@ class StationaryModel(ModelBase):
         Name of the model.
     """
 
-    def __init__(self, operator, rhs, output_functional=None, products=None,
-                 parameter_space=None, estimator=None, visualizer=None, name=None):
+    def __init__(self, operator, rhs, output_functional=None, output_function=None, products=None,
+            parameter_space=None, estimator=None, visualizer=None, name=None):
 
         if isinstance(rhs, VectorArrayInterface):
             assert rhs in operator.range
@@ -141,9 +145,12 @@ class StationaryModel(ModelBase):
 
         U = self.operator.apply_inverse(self.rhs.as_range_array(mu), mu=mu)
         if return_output:
-            if self.output_functional is None:
+            if self.output_function:
+                return U, self.output_function(U, mu)
+            elif self.output_functional:
+                return U, self.output_functional.apply(U, mu=mu)
+            else:
                 raise ValueError('Model has no output')
-            return U, self.output_functional.apply(U, mu=mu)
         else:
             return U
 
@@ -186,6 +193,10 @@ class InstationaryModel(ModelBase):
         |Operator| mapping a given solution to the model output. In many applications,
         this will be a |Functional|, i.e. an |Operator| mapping to scalars.
         This is not required, however.
+    output_function
+        Callable of the form `value = output_function(U, mu)`. If specified, `value` is
+        returned in `solve` as output, even if `output_functional != None`.
+        This is mainly intended for corrected outputs of reduced models.
     products
         A dict of product |Operators| defined on the discrete space the
         problem is posed on. For each product with key `'x'` a corresponding
@@ -211,8 +222,8 @@ class InstationaryModel(ModelBase):
     """
 
     def __init__(self, T, initial_data, operator, rhs, mass=None, time_stepper=None, num_values=None,
-                 output_functional=None, products=None, parameter_space=None, estimator=None, visualizer=None,
-                 name=None):
+                 output_functional=None, output_function=None, products=None, parameter_space=None, estimator=None,
+                 visualizer=None, name=None):
 
         if isinstance(rhs, VectorArrayInterface):
             assert rhs in operator.range
@@ -263,9 +274,12 @@ class InstationaryModel(ModelBase):
         U = self.time_stepper.solve(operator=self.operator, rhs=self.rhs, initial_data=U0, mass=self.mass,
                                     initial_time=0, end_time=self.T, mu=mu, num_values=self.num_values)
         if return_output:
-            if self.output_functional is None:
+            if self.output_function:
+                return U, self.output_function(U, mu)
+            elif self.output_functional:
+                return U, self.output_functional.apply(U, mu=mu)
+            else:
                 raise ValueError('Model has no output')
-            return U, self.output_functional.apply(U, mu=mu)
         else:
             return U
 
