@@ -272,7 +272,8 @@ def reduction_error_analysis(rom, fom, reductor,
 
 
 
-def plot_reduction_error_analysis(result, max_basis_size=None, plot_custom_logarithmic=True, return_fig=False):
+def plot_reduction_error_analysis(result, max_basis_size=None, plot_effectivities=True, plot_condition=True,
+        plot_custom_logarithmic=True, plot_custom_with_errors=False, return_fig=False):
 
     error_norms = 'norms' in result
     estimator = 'estimates' in result
@@ -293,9 +294,18 @@ def plot_reduction_error_analysis(result, max_basis_size=None, plot_custom_logar
     max_basis_size = max_basis_size if max_basis_size else len(basis_sizes)
 
     import matplotlib.pyplot as plt
+    from matplotlib.colors import TABLEAU_COLORS as COLORS
+    colors = [[]]
+
+    def get_color():
+        if len(colors[0]) == 0:
+            colors[0] = list(COLORS.keys())
+            colors[0].reverse()
+        return colors[0].pop()
+
     fig = plt.figure()
-    num_plots = (int(error_norms or estimator) + int(error_norms and estimator)
-                 + int(condition) + int(bool(custom)))
+    num_plots = (int(error_norms or estimator) + int(error_norms and estimator and plot_effectivities)
+                 + int(condition and plot_condition) + int(bool(custom) and not plot_custom_with_errors))
     current_plot = 1
 
     if error_norms or estimator:
@@ -303,16 +313,38 @@ def plot_reduction_error_analysis(result, max_basis_size=None, plot_custom_logar
         legend = []
         if error_norms:
             for name, errors in zip(error_norm_names, max_errors):
-                ax.semilogy(basis_sizes[:max_basis_size], errors[:max_basis_size])
+                ax.semilogy(basis_sizes[:max_basis_size], errors[:max_basis_size], color=get_color())
                 legend.append(name)
         if estimator:
-            ax.semilogy(basis_sizes[:max_basis_size], max_estimates[:max_basis_size])
+            ax.semilogy(basis_sizes[:max_basis_size], max_estimates[:max_basis_size], color=get_color())
             legend.append('estimator')
-        ax.legend(legend)
+        if custom and plot_custom_with_errors:
+            axwithyright = ax.twinx()
+            max_custom_values = np.max(custom_values, axis=0)
+            axwithyright_legend = []
+            for i, values in enumerate(max_custom_values):
+                values = values.reshape(basis_sizes.shape)
+                color = get_color()
+                if plot_custom_logarithmic:
+                    axwithyright.semilogy(basis_sizes[:max_basis_size], values[:max_basis_size], color=color)
+                else:
+                    axwithyright.plot(basis_sizes[:max_basis_size], values[:max_basis_size], color=color)
+                axwithyright_legend.append(custom_names[i])
+            if len(axwithyright_legend) == 1:
+                axwithyright.tick_params(axis='y', labelcolor=color)
+                axwithyright.set_ylabel(axwithyright_legend[0], color=color)
+            else:
+                axwithyright.tick_params(axis='y', labelcolor='gray')
+                axwithyright.set_ylabel('custom values (bottom left)', color='gray')
+                axwithyright.legend(axwithyright_legend, loc=3)
+            ax.set_ylabel('error/estimator (top right)')
+            fig.tight_layout(rect=[0, 0.03, 1, 0.95])
+        ax.legend(legend, loc=1)
+        ax.set_xlabel('ROM size')
         ax.set_title('maximum errors')
         current_plot += 1
 
-    if error_norms and estimator:
+    if error_norms and estimator and plot_effectivities:
         ax = fig.add_subplot(1, num_plots, current_plot)
         ax.semilogy(basis_sizes[:max_basis_size], min_effectivities[:max_basis_size])
         ax.semilogy(basis_sizes[:max_basis_size], max_effectivities[:max_basis_size])
@@ -320,13 +352,13 @@ def plot_reduction_error_analysis(result, max_basis_size=None, plot_custom_logar
         ax.set_title('estimator effectivities')
         current_plot += 1
 
-    if condition:
+    if condition and plot_condition:
         ax = fig.add_subplot(1, num_plots, current_plot)
         ax.semilogy(basis_sizes[:max_basis_size], max_conditions[:max_basis_size])
         ax.set_title('maximum condition')
         current_plot += 1
 
-    if custom:
+    if custom and not plot_custom_with_errors:
         ax = fig.add_subplot(1, num_plots, current_plot)
         legend = []
         max_custom_values = np.max(custom_values, axis=0)
