@@ -17,7 +17,8 @@ class CoerciveRBReductor(StationaryRBReductor):
 
     The only addition to :class:`~pymor.reductors.basic.StationaryRBReductor` is an error
     estimator which evaluates the dual norm of the residual with respect to a given inner
-    product. For the reduction of the residual we use
+    product and which provides the output estimates as in the primal RB approach
+    [Haa2017]_ (section 2.3). For the reduction of the residual we use
     :class:`~pymor.reductors.residual.ResidualReductor` for improved numerical stability
     [BEOR14]_.
 
@@ -36,20 +37,29 @@ class CoerciveRBReductor(StationaryRBReductor):
         constant of the given problem. Note that the computed error estimate is only
         guaranteed to be an upper bound for the error when an appropriate coercivity
         estimate is specified.
+    rhs_continuity_estimator
+        A bound for the continuity constant of the right hand side of the given problem
+        (similar to `coercivity_estimator`), used for the output estimation in the
+        general case (i.e. when `compliant == False`).
+    compliant
+        Boolean value to specify whether the output functional of the model coincides
+        with the models right hand side (`True`, compliant case) or not (`False`).
+        In the compliant case, Proposition 2.19 in [Haa2017]_ is used while Proposition 2.24
+        in [Haa2017]_ is used in the general case.
     """
 
-    def __init__(self, fom, RB=None, product=None, coercivity_estimator=None,
-                 check_orthonormality=None, check_tol=None):
+    def __init__(self, fom, RB=None, product=None, coercivity_estimator=None, rhs_continuity_estimator=None,
+                 compliant=False, check_orthonormality=None, check_tol=None):
         super().__init__(fom, RB, product=product, check_orthonormality=check_orthonormality,
                          check_tol=check_tol)
-        self.coercivity_estimator = coercivity_estimator
         self.residual_reductor = ResidualReductor(self.bases['RB'], self.fom.operator, self.fom.rhs,
                                                   product=product, riesz_representatives=True)
+        self.__auto_init(locals())
 
     def assemble_estimator(self):
         residual = self.residual_reductor.reduce()
         estimator = CoerciveRBEstimator(residual, tuple(self.residual_reductor.residual_range_dims),
-                                        self.coercivity_estimator)
+                                        self.coercivity_estimator, self.compliant, self.rhs_continuity_estimator)
         return estimator
 
     def assemble_estimator_for_subbasis(self, dims):
@@ -62,7 +72,7 @@ class CoerciveRBEstimator(ImmutableInterface):
     Not to be used directly.
     """
 
-    def __init__(self, residual, residual_range_dims, coercivity_estimator):
+    def __init__(self, residual, residual_range_dims, coercivity_estimator, compliant, rhs_continuity_estimator):
         self.__auto_init(locals())
 
     def estimate(self, U, mu, m):
@@ -71,15 +81,28 @@ class CoerciveRBEstimator(ImmutableInterface):
             est /= self.coercivity_estimator(mu)
         return est
 
+    def output_error(self, mu, m):
+        U = m.solve(mu=mu)
+        est = self.residual.apply(U, mu=mu).l2_norm()
+        if self.compliant and self.coercivity_estimator:
+            return est**2 / self.coercivity_estimator(mu)
+        elif self.compliant:
+            return est**2
+        elif self.rhs_continuity_estimator:
+            return est * self.rhs_continuity_estimator(mu)
+        else:
+            return est
+
     def restricted_to_subbasis(self, dim, m):
         if self.residual_range_dims:
             residual_range_dims = self.residual_range_dims[:dim + 1]
             residual = self.residual.projected_to_subbasis(residual_range_dims[-1], dim)
-            return CoerciveRBEstimator(residual, residual_range_dims, self.coercivity_estimator)
+            return CoerciveRBEstimator(residual, residual_range_dims, self.coercivity_estimator, self.compliant,
+                    self.rhs_continuity_estimator)
         else:
             self.logger.warning('Cannot efficiently reduce to subbasis')
             return CoerciveRBEstimator(self.residual.projected_to_subbasis(None, dim), None,
-                                       self.coercivity_estimator)
+                                       self.coercivity_estimator, self.compliant, self.rhs_continuity_estimater)
 
 
 class SimpleCoerciveRBReductor(StationaryRBReductor):
@@ -91,7 +114,8 @@ class SimpleCoerciveRBReductor(StationaryRBReductor):
        with better numerical stability.
 
     The only addition is to :class:`~pymor.reductors.basic.StationaryRBReductor` is an error
-    estimator, which evaluates the norm of the residual with respect to a given inner product.
+    estimator, which evaluates the norm of the residual with respect to a given inner product
+    and which provides the output estimates as in the primal RB approach [Haa2017]_ (section 2.3).
 
     Parameters
     ----------
@@ -108,10 +132,19 @@ class SimpleCoerciveRBReductor(StationaryRBReductor):
         constant of the given problem. Note that the computed error estimate is only
         guaranteed to be an upper bound for the error when an appropriate coercivity
         estimate is specified.
+    rhs_continuity_estimator
+        A bound for the continuity constant of the right hand side of the given problem
+        (similar to `coercivity_estimator`), used for the output estimation in the
+        general case (i.e. when `compliant == False`).
+    compliant
+        Boolean value to specify whether the output functional of the model coincides
+        with the models right hand side (`True`, compliant case) or not (`False`).
+        In the compliant case, Proposition 2.19 in [Haa2017]_ is used while Proposition 2.24
+        in [Haa2017]_ is used in the general case.
     """
 
-    def __init__(self, fom, RB=None, product=None, coercivity_estimator=None,
-                 check_orthonormality=None, check_tol=None):
+    def __init__(self, fom, RB=None, product=None, coercivity_estimator=None, rhs_continuity_estimator=None,
+                 compliant=False, check_orthonormality=None, check_tol=None):
         assert fom.operator.linear and fom.rhs.linear
         assert isinstance(fom.operator, LincombOperator)
         assert all(not op.parametric for op in fom.operator.operators)
@@ -121,10 +154,10 @@ class SimpleCoerciveRBReductor(StationaryRBReductor):
 
         super().__init__(fom, RB, product=product, check_orthonormality=check_orthonormality,
                          check_tol=check_tol)
-        self.coercivity_estimator = coercivity_estimator
         self.residual_reductor = ResidualReductor(self.bases['RB'], self.fom.operator, self.fom.rhs,
                                                   product=product)
         self.extends = None
+        self.__auto_init(locals())
 
     def assemble_estimator(self):
         fom, RB, extends = self.fom, self.bases['RB'], self.extends
@@ -194,7 +227,8 @@ class SimpleCoerciveRBReductor(StationaryRBReductor):
 
         estimator_matrix = NumpyMatrixOperator(estimator_matrix)
 
-        estimator = SimpleCoerciveRBEstimator(estimator_matrix, self.coercivity_estimator)
+        estimator = SimpleCoerciveRBEstimator(estimator_matrix, self.coercivity_estimator,
+                self.rhs_continuity_estimator, self.compliant)
         self.extends = (len(RB), dict(R_R=R_R, RR_R=RR_R, R_Os=R_Os, RR_Os=RR_Os))
 
         return estimator
@@ -209,11 +243,11 @@ class SimpleCoerciveRBEstimator(ImmutableInterface):
     Not to be used directly.
     """
 
-    def __init__(self, estimator_matrix, coercivity_estimator):
+    def __init__(self, estimator_matrix, coercivity_estimator, rhs_continuty_estimator, compliant):
         self.__auto_init(locals())
         self.norm = induced_norm(estimator_matrix)
 
-    def estimate(self, U, mu, m):
+    def _estimate_residual(self, U, mu, m):
         if len(U) > 1:
             raise NotImplementedError
         if not m.rhs.parametric:
@@ -228,11 +262,28 @@ class SimpleCoerciveRBEstimator(ImmutableInterface):
 
         C = np.hstack((CR, np.dot(CO[..., np.newaxis], U.to_numpy()).ravel()))
 
-        est = self.norm(NumpyVectorSpace.make_array(C))
+        return self.norm(NumpyVectorSpace.make_array(C))
+
+    def estimate(self, U, mu, m):
+        est = self._estimate_residual(U, mu, m)
+
         if self.coercivity_estimator:
             est /= self.coercivity_estimator(mu)
 
         return est
+
+    def output_error(self, mu, m):
+        U = m.solve(mu=mu)
+        est = self._estimate_residual(U, mu, m)
+        if self.compliant and self.coercivity_estimator:
+            return est**2 / self.coercivity_estimator(mu)
+        elif self.compliant:
+            return est**2
+        elif self.rhs_continuity_estimator:
+            return est * self.rhs_continuity_estimator(mu)
+        else:
+            return est
+
 
     def restricted_to_subbasis(self, dim, m):
         cr = 1 if not m.rhs.parametric else len(m.rhs.operators)
@@ -243,4 +294,5 @@ class SimpleCoerciveRBEstimator(ImmutableInterface):
                                  ((np.arange(co)*old_dim)[..., np.newaxis] + np.arange(dim)).ravel() + cr))
         matrix = self.estimator_matrix.matrix[indices, :][:, indices]
 
-        return SimpleCoerciveRBEstimator(NumpyMatrixOperator(matrix), self.coercivity_estimator)
+        return SimpleCoerciveRBEstimator(NumpyMatrixOperator(matrix), self.coercivity_estimator,
+                rhs_continuty_estimator, compliant)
