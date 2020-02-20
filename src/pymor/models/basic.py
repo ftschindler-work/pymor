@@ -8,6 +8,7 @@ from pymor.operators.constructions import VectorOperator, induced_norm
 from pymor.tools.formatrepr import indent_value
 from pymor.tools.frozendict import FrozenDict
 from pymor.vectorarrays.interfaces import VectorArrayInterface
+from pymor.vectorarrays.block import BlockVectorArray, BlockVectorSpace
 
 
 class ModelBase(ModelInterface):
@@ -153,6 +154,36 @@ class StationaryModel(ModelBase):
                 raise ValueError('Model has no output')
         else:
             return U
+
+
+class StationaryPrimalDualModel(ModelInterface):
+
+    def __init__(self, primal, dual, output_correction_op=None, output_correction_rhs=None, name=None):
+        assert isinstance(primal, StationaryModel)
+        assert isinstance(dual, StationaryModel)
+
+        solution_space = BlockVectorSpace((primal.solution_space, dual.solution_space))
+        output_space = primal.output_space
+        linear = primal.linear and dual.linear
+
+        self.__auto_init(locals())
+
+    def _solve(self, mu=None, return_output=False, **kwargs):
+
+        Q = self.dual.solve(mu=mu, return_output=False, **kwargs)
+        U = self.primal.solve(mu=mu, return_output=return_output, **kwargs)
+
+        if not return_output:
+            return BlockVectorArray([U, Q])
+        else:
+            U, uncorrected_output = U
+            assert self.output_correction_op and self.output_correction_rhs
+
+            output = uncorrected_output.to_numpy() \
+                    - output_correction_rhs.H.apply(Q, mu=mu).to_numpy() \
+                    + output_correction_operator.apply2(Q, U, mu=mu)
+
+            return BlockVectorArray([U, Q]), self.output_space.from_numpy(output)
 
 
 class InstationaryModel(ModelBase):
