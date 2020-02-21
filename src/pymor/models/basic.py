@@ -4,7 +4,8 @@
 
 from pymor.algorithms.timestepping import TimeStepperInterface
 from pymor.models.interfaces import ModelInterface
-from pymor.operators.constructions import VectorOperator, induced_norm
+from pymor.operators.block import BlockDiagonalOperator
+from pymor.operators.constructions import VectorOperator, induced_norm, ZeroOperator
 from pymor.tools.formatrepr import indent_value
 from pymor.tools.frozendict import FrozenDict
 from pymor.vectorarrays.interfaces import VectorArrayInterface
@@ -158,13 +159,38 @@ class StationaryModel(ModelBase):
 
 class StationaryPrimalDualModel(ModelInterface):
 
-    def __init__(self, primal, dual, output_correction_op=None, output_correction_rhs=None, name=None):
+    def __init__(self, primal, dual, output_correction_op=None, output_correction_rhs=None, estimator=None, name=None):
         assert isinstance(primal, StationaryModel)
         assert isinstance(dual, StationaryModel)
 
-        solution_space = BlockVectorSpace((primal.solution_space, dual.solution_space))
-        output_space = primal.output_space
-        linear = primal.linear and dual.linear
+        self.solution_space = BlockVectorSpace((primal.solution_space, dual.solution_space))
+        self.output_space = primal.output_space
+        self.linear = primal.linear and dual.linear
+
+        self.build_parameter_type(primal.parameter_type, dual.parameter_type)
+        if primal.parameter_space and dual.parameter_space:
+            assert primal.parameter_space == dual.parameter_space # else merge them
+            self.parameter_space = primal.parameter_space
+        elif primal.parameter_space:
+            self.parameter_space = primal.parameter_space
+        elif dual.parameter_space:
+            self.parameter_space = dual.parameter_space
+        else:
+            self.parameter_space = None
+
+        products = {}
+        for kk, pp in primal.products.items():
+            products[f'primal_{kk}'] = BlockDiagonalOperator(
+                    [pp, ZeroOperator(source=dual.solution_space, range=dual.solution_space)])
+        for kk, pp in dual.products.items():
+            products[f'dual_{kk}'] = BlockDiagonalOperator(
+                    [ZeroOperator(source=primal.solution_space, range=primal.solution_space), pp])
+        self.products = FrozenDict(products or {})
+
+        if self.products:
+            for k, v in products.items():
+                setattr(self, f'{k}_product', v)
+                setattr(self, f'{k}_norm', induced_norm(v))
 
         self.__auto_init(locals())
 
@@ -174,16 +200,32 @@ class StationaryPrimalDualModel(ModelInterface):
         U = self.primal.solve(mu=mu, return_output=return_output, **kwargs)
 
         if not return_output:
-            return BlockVectorArray([U, Q])
+            return BlockVectorArray([U, Q], self.solution_space)
         else:
             U, uncorrected_output = U
             assert self.output_correction_op and self.output_correction_rhs
 
             output = uncorrected_output.to_numpy() \
-                    - output_correction_rhs.H.apply(Q, mu=mu).to_numpy() \
-                    + output_correction_operator.apply2(Q, U, mu=mu)
+                    - self.output_correction_rhs.H.apply(Q, mu=mu).to_numpy() \
+                    + self.output_correction_op.apply2(Q, U, mu=mu)
 
-            return BlockVectorArray([U, Q]), self.output_space.from_numpy(output)
+            return BlockVectorArray([U, Q], self.solution_space), self.output_space.from_numpy(output)
+
+    def estimate(self, U, mu=None):
+        if self.estimator is not None and hasattr(self.estimator, 'estimate'):
+            return self.estimator.estimate(U, mu=mu, m=self)
+        else:
+            if type(U) in (list, tuple):
+                U = BlockVectorArray(U, self.solution_space)
+            assert U in self.solution_space
+            U, Q = U._blocks
+            return (self.primal.estimate(U, mu=mu), self.dual.estimate(Q, mu=mu))
+
+    def output_error(self, mu=None):
+        if self.estimator is not None and hasattr(self.estimator, 'output_error'):
+            return self.estimator.output_error(mu=mu, m=self)
+        else:
+            raise NotImplementedError('Model has no output estimator.')
 
 
 class InstationaryModel(ModelBase):
