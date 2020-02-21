@@ -2,13 +2,21 @@
 # Copyright 2013-2020 pyMOR developers and contributors. All rights reserved.
 # License: BSD 2-Clause License (http://opensource.org/licenses/BSD-2-Clause)
 
+from numbers import Number
+
 import numpy as np
 
-from pymor.core.interfaces import ImmutableInterface
+from pymor.algorithms.greedy import WeakGreedySurrogate, weak_greedy
+from pymor.algorithms.projection import project, project_to_subbasis
+from pymor.core.interfaces import BasicInterface, ImmutableInterface
+from pymor.models.basic import StationaryModel, StationaryPrimalDualModel
 from pymor.operators.constructions import LincombOperator, induced_norm
 from pymor.operators.numpy import NumpyMatrixOperator
-from pymor.reductors.basic import StationaryRBReductor
+from pymor.parallel.dummy import dummy_pool
+from pymor.parallel.interfaces import RemoteObjectInterface
+from pymor.reductors.basic import StationaryRBReductor, StationaryPGRBReductor
 from pymor.reductors.residual import ResidualReductor
+from pymor.vectorarrays.block import BlockVectorArray
 from pymor.vectorarrays.numpy import NumpyVectorSpace
 
 
@@ -296,3 +304,210 @@ class SimpleCoerciveRBEstimator(ImmutableInterface):
 
         return SimpleCoerciveRBEstimator(NumpyMatrixOperator(matrix), self.coercivity_estimator,
                 rhs_continuty_estimator, compliant)
+
+
+class CoercivePrimalDualRBReductor(BasicInterface):
+    """Primal/dual Reduced Basis reductor for |StationaryModels| with dual.
+
+    In addition to :class:`~pymor.reductors.coercive.CoerciveRBReductor`, a dual rom is assembled to
+    provide improved output error estimates as well as a corrected reduced output following the primal-dual
+    RB approach [Haa2017]_ (section 2.4). For the reduction of the residuals we use
+    :class:`~pymor.reductors.residual.ResidualReductor` for improved numerical stability
+    [BEOR14]_.
+
+    Parameters
+    ----------
+    fom
+        The (primal/dual) |Model| which is to be reduced.
+    RB
+        |VectorArray| containing the (primal) reduced basis on which to project.
+    dual_RB
+        |VectorArray| containing the dual reduced basis on which to project.
+    product
+        Inner product for the orthonormalization of `RB` and `dual_RB`, the projection of the
+        |Operators| given by `vector_ranged_operators` and for the computation of
+        Riesz representatives of the residuals. If `None`, the Euclidean product is used.
+    coercivity_estimator
+        `None` or a |Parameterfunctional| returning a lower bound for the coercivity
+        constant of the given problem. Note that the computed error estimate is only
+        guaranteed to be an upper bound for the error when an appropriate coercivity
+        estimate is specified.
+    """
+
+    def __init__(self, fom, primal_RB=None, dual_RB=None, primal_product=None, dual_product=None, coercivity_estimator=None,
+            check_orthonormality=None, check_tol=None):
+        assert isinstance(fom, StationaryPrimalDualModel)
+        self.fom = fom
+        self.primal = CoerciveRBReductor(fom.primal, RB=primal_RB, product=primal_product,
+                coercivity_estimator=coercivity_estimator, check_orthonormality=check_orthonormality,
+                check_tol=check_tol)
+        self.dual = CoerciveRBReductor(fom.dual, RB=dual_RB, product=dual_product,
+                coercivity_estimator=coercivity_estimator, check_orthonormality=check_orthonormality,
+                check_tol=check_tol)
+        self.bases = {'primal_RB': self.primal.bases['RB'], 'dual_RB': self.dual.bases['RB']}
+        self.coercivity_estimator=coercivity_estimator
+        self._last_rom = None
+
+    def reduce(self, dims=None):
+        if dims is None:
+            dims = {k: len(v) for k, v in self.bases.items()}
+        if isinstance(dims, Number):
+            dims = {k: dims for k in self.bases}
+        if set(dims.keys()) != set(self.bases.keys()):
+            raise ValueError(f'Must specify dimensions for {set(self.bases.keys())}')
+        for k, d in dims.items():
+            if d < 0:
+                raise ValueError(f'Reduced state dimension must be larger than zero {k}')
+            if d > len(self.bases[k]):
+                raise ValueError(f'Specified reduced state dimension larger than reduced basis {k}')
+
+        if self._last_rom is None or any(dims[b] > self._last_rom_dims[b] for b in dims):
+            # build estimator and rom
+            primal_rom = self.primal.reduce()
+            primal_rom.disable_logging()
+            dual_rom = self.dual.reduce()
+            dual_rom.disable_logging()
+            estimator = CoercivePrimalDualRBEstimator(
+                    primal_rom.estimator.with_(coercivity_estimator=None),
+                    dual_rom.estimator.with_(coercivity_estimator=None),
+                    self.coercivity_estimator)
+            self._output_correction_reductor = StationaryPGRBReductor(
+                StationaryModel(self.fom.primal.operator, self.fom.primal.rhs),
+                range_RB=self.bases['dual_RB'], source_RB=self.bases['primal_RB'],
+                check_orthonormality=False)
+            output_correction = self._output_correction_reductor.reduce()
+            self._last_rom = StationaryPrimalDualModel(primal_rom, dual_rom, estimator=estimator,
+                    output_correction_op=output_correction.operator, output_correction_rhs=output_correction.rhs)
+            self._last_rom.disable_logging()
+            self._last_rom_dims = {k: len(v) for k, v in self.bases.items()}
+
+        if dims == self._last_rom_dims:
+            return self._last_rom
+        else:
+            # build restricted estimator and rom
+            primal_rom = self.primal.reduce(dims={'RB': dims['primal_RB']})
+            primal_rom.disable_logging()
+            dual_rom = self.dual.reduce(dims={'RB': dims['dual_RB']})
+            dual_rom.disable_logging()
+            estimator = CoercivePrimalDualRBEstimator(
+                    primal_rom.estimator.with_(coercivity_estimator=None),
+                    dual_rom.estimator.with_(coercivity_estimator=None),
+                    self.coercivity_estimator)
+            output_correction = self._output_correction_reductor.reduce(
+                    dims={'range_RB': dims['dual_RB'], 'source_RB': dims['primal_RB']})
+            rom = StationaryPrimalDualModel(primal_rom, dual_rom, estimator=estimator,
+                    output_correction_op=output_correction.operator, output_correction_rhs=output_correction.rhs)
+            rom.disable_logging()
+            return rom
+
+    def reconstruct(self, u, basis=None):
+        assert not basis
+        assert isinstance(u, BlockVectorArray)
+        u, q = u._blocks
+        return BlockVectorArray([self.primal.reconstruct(u), self.dual.reconstruct(q)], self.fom.solution_space)
+
+
+class CoercivePrimalDualRBEstimator(ImmutableInterface):
+    """Instantiated by :class:`CoercivePrimalDualRBReductor`.
+
+    Not to be used directly.
+    """
+
+    def __init__(self, primal_residual_estimator, dual_residual_estimator, coercivity_estimator):
+        self.__auto_init(locals())
+
+    def output_error(self, mu, m):
+        U, Q = m.solve(mu=mu)._blocks
+        est = self.primal_residual_estimator.estimate(U, mu=mu, m=m.primal) \
+                * self.dual_residual_estimator.estimate(Q, mu=mu, m=m.dual)
+        if self.coercivity_estimator:
+            est /= self.coercivity_estimator(mu)
+        return est
+
+
+class PrimalDualRBSurrogate(WeakGreedySurrogate):
+    """Surrogate for the :func:`~pymor.algorithms.greedy.weak_greedy` error.
+
+    TODO: does not really belong here, nothing coercive about it
+
+    See :class:`CoercivePrimalDualRBReductor` for more information.
+
+    Given a `fom`, a `training_set`, a `product` and corresponding `coercivity_estimator`,
+    this can be used as in ::
+
+        fom = StationaryPrimalDualModel(fom, dual=...)
+        reductor = CoercivePrimalDualRBReductor(
+            fom, product=product, coercivity_estimator=coercivity_estimator)
+        rb_surrogate = PrimalDualRBSurrogate(reductor)
+
+        greedy_data = weak_greedy(rb_surrogate, training_set)
+
+        greedy_data['rom'] = reductor.reduce()
+        greedy_data['dual_rom'] = reductor.dual.reduce()
+    """
+
+    def __init__(self, reductor, use_estimator='OUTPUT', extension_params=None, pool=None):
+        assert use_estimator in ('OUTPUT', 'STATE', 'DUAL')
+        pool = pool or dummy_pool
+        self.__auto_init(locals())
+        self.rom = None
+
+    def evaluate(self, mus, return_all_values=False):
+        if self.rom is None:
+            with self.logger.block('Reducing ...'):
+                self.rom = self.reductor.reduce()
+
+        if not isinstance(mus, RemoteObjectInterface):
+            mus = self.pool.scatter_list(mus)
+
+        result = self.pool.apply(_primal_dual_rb_surrogate_evaluate,
+                                 rom=self.rom,
+                                 use_estimator=self.use_estimator,
+                                 mus=mus,
+                                 return_all_values=return_all_values)
+        if return_all_values:
+            return np.hstack(result)
+        else:
+            errs, max_err_mus = list(zip(*result))
+            max_err_ind = np.argmax(errs)
+            return errs[max_err_ind], max_err_mus[max_err_ind]
+
+    def extend(self, mu):
+        with self.logger.block(f'Computing solution snapshots for mu = {mu} ...'):
+            U, Q = self.reductor.fom.solve(mu)._blocks
+        with self.logger.block('Extending primal basis with primal solution snapshot ...'):
+            extension_params = self.extension_params
+            if len(U) > 1 and extension_params is None:
+                extension_params = {'method': 'pod'}
+            self.reductor.primal.extend_basis(U, copy_U=False, **(extension_params or {}))
+        with self.logger.block('Extending dual basis with dual solution snapshot ...'):
+            extension_params = self.extension_params
+            if len(Q) > 1 and extension_params is None:
+                extension_params = {'method': 'pod'}
+            self.reductor.dual.extend_basis(Q, copy_U=False, **(extension_params or {}))
+        with self.logger.block('Reducing ...'):
+            self.rom = self.reductor.reduce()
+
+
+def _primal_dual_rb_surrogate_evaluate(rom, use_estimator, mus, return_all_values):
+    if not mus:
+        if return_all_values:
+            return []
+        else:
+            return -1., None
+
+    assert use_estimator in ('OUTPUT', 'STATE', 'DUAL')
+    if use_estimator == 'OUTPUT':
+        errors = [rom.output_error(mu) for mu in mus]
+    elif use_estimator == 'STATE':
+        errors = [rom.primal.estimate(rom.primal.solve(mu), mu) for mu in mus]
+    else: # 'DUAL'
+        errors = [rom.dual.estimate(rom.dual.solve(mu), mu) for mu in mus]
+    # most error_norms will return an array of length 1 instead of a number, so we extract the numbers
+    # if necessary
+    errors = [x[0] if hasattr(x, '__len__') else x for x in errors]
+    if return_all_values:
+        return errors
+    else:
+        max_err_ind = np.argmax(errors)
+        return errors[max_err_ind], mus[max_err_ind]
