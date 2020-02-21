@@ -196,6 +196,68 @@ class StationaryRBReductor(ProjectionBasedReductor):
         return StationaryModel(parameter_space=self.fom.parameter_space, estimator=estimator, **projected_operators)
 
 
+class StationaryPGRBReductor(ProjectionBasedReductor):
+    """Petrov-Galerkin projection of a |StationaryModel|.
+
+    Parameters
+    ----------
+    fom
+        The full order |Model| to reduce.
+    range_RB
+        The basis of the range reduced space onto which to project. If `None` an empty basis is used.
+    source_RB
+        The basis of the source reduced space onto which to project. If `None` an empty basis is used.
+    range_product
+        Inner product |Operator| w.r.t. which `range_RB` is orthonormalized. If `None`, the Euclidean
+        inner product is used.
+    source_product
+        Inner product |Operator| w.r.t. which `source_RB` is orthonormalized. If `None`, the Euclidean
+        inner product is used.
+    check_orthonormality
+        See :class:`ProjectionBasedReductor`.
+    check_tol
+        See :class:`ProjectionBasedReductor`.
+    """
+    def __init__(self, fom, range_RB=None, source_RB=None, range_product=None, source_product=None,
+            check_orthonormality=None, check_tol=None):
+        assert isinstance(fom, StationaryModel)
+        range_RB = range_RB or fom.operator.range.empty()
+        assert range_RB in fom.operator.range
+        source_RB = source_RB or fom.operator.source.empty()
+        assert source_RB in fom.operator.source
+        super().__init__(fom,
+                         {'range_RB': range_RB, 'source_RB': source_RB},
+                         {'range_RB': range_product, 'source_RB': source_product},
+                         check_orthonormality=check_orthonormality, check_tol=check_tol)
+
+    def project_operators(self):
+        fom = self.fom
+        range_RB = self.bases['range_RB']
+        source_RB = self.bases['source_RB']
+        projected_operators = {
+            'operator':          project(fom.operator, range_RB, source_RB),
+            'rhs':               project(fom.rhs, range_RB, None),
+            'products':          {k: project(v, source_RB, source_RB) for k, v in fom.products.items()},
+            'output_functional': project(fom.output_functional, None, source_RB) if fom.output_functional else None
+        }
+        return projected_operators
+
+    def project_operators_to_subbasis(self, dims):
+        rom = self._last_rom
+        range_dim = dims['range_RB']
+        source_dim = dims['source_RB']
+        projected_operators = {
+            'operator':          project_to_subbasis(rom.operator, range_dim, source_dim),
+            'rhs':               project_to_subbasis(rom.rhs, range_dim, None),
+            'products':          {k: project_to_subbasis(v, source_dim, source_dim) for k, v in rom.products.items()},
+            'output_functional': project_to_subbasis(rom.output_functional, None, source_dim) \
+                    if rom.output_functional else None
+        }
+        return projected_operators
+
+    def build_rom(self, projected_operators, estimator):
+        return StationaryModel(parameter_space=self.fom.parameter_space, estimator=estimator, **projected_operators)
+
 class InstationaryRBReductor(ProjectionBasedReductor):
     """Galerkin projection of an |InstationaryModel|.
 
