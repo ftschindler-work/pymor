@@ -102,7 +102,7 @@ class CoerciveRBEstimator(ImmutableObject):
         else:
             self.logger.warning('Cannot efficiently reduce to subbasis')
             return CoerciveRBEstimator(self.residual.projected_to_subbasis(None, dim), None,
-                                       self.coercivity_estimator, self.compliant, self.rhs_continuity_estimater)
+                                       self.coercivity_estimator, self.compliant, self.rhs_continuity_estimator)
 
 
 class SimpleCoerciveRBReductor(StationaryRBReductor):
