@@ -24,6 +24,7 @@ class BlockVectorArray(VectorArray):
     def __init__(self, blocks, space):
         self._blocks = tuple(blocks)
         self.space = space
+        assert all([b in s for b, s in zip(self._blocks, space.subspaces)])
         assert self._blocks_are_valid()
 
     def to_numpy(self, ensure_copy=False):
