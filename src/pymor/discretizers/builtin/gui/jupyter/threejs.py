@@ -205,7 +205,7 @@ class ColorBarRenderer(widgets.VBox):
 
     def _gen_sprite(self):
         from PIL import Image, ImageFont, ImageDraw
-        # upsacle to pow2
+        # upscale to pow2
         sprite_size = (self.render_size[0], self.render_size[1])
         image = Image.new('RGBA', sprite_size, color=(255,255,255,255))
         draw = ImageDraw.Draw(image)
@@ -278,7 +278,7 @@ class ThreeJSPlot(widgets.VBox):
 def visualize_py3js(grid, U, bounding_box=([0, 0], [1, 1]), codim=2, title=None, legend=None,
                     separate_colorbars=False, rescale_colorbars=False, columns=2,
          color_map=get_cmap('viridis')):
-    """Generate a pythreejs Plot and associated controls for  scalar data associated to a two-dimensional |Grid|.
+    """Generate a pythreejs Plot and associated controls for scalar data associated to a two-dimensional |Grid|.
 
     The grid's |ReferenceElement| must be the triangle or square. The data can either
     be attached to the faces or vertices of the grid.

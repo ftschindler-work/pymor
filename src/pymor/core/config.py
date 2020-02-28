@@ -64,7 +64,7 @@ def _get_qt_version():
 
 
 def is_jupyter():
-    """This Method is not foolprof and might fail with any given jupyter release
+    """This Method is not foolproof and might fail with any given jupyter release
     :return: True if we believe to be running in a Jupyter Notebook or Lab
     """
     try:
