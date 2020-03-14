@@ -15,7 +15,7 @@ class PatchVisualizer(BasicObject):
     """Visualize scalar data associated to a two-dimensional |Grid| as a patch plot.
 
     The grid's |ReferenceElement| must be the triangle or square. The data can either
-    be attached to the faces or vertices of the grid.
+    be attached to the elements or vertices of the grid.
 
     Parameters
     ----------
