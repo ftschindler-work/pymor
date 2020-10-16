@@ -117,7 +117,7 @@ if config.HAVE_TORCH:
 
             # build a reduced basis using POD and compute training data
             if not hasattr(self, 'reduced_basis'):
-                self.reduced_basis, self.mse_basis = self.build_basis()
+                self.build_basis()
 
             # determine the numbers of neurons in the hidden layers
             if isinstance(hidden_layers, str):
@@ -135,7 +135,7 @@ if config.HAVE_TORCH:
                         U = self.fom.solution_space.empty()
                         for mu in self.validation_set:
                             U.append(self.fom.solve(mu))
-                        self.validation_data = self._compute_samples(self.validation_set, U, self.reduced_basis)
+                        self.validation_data = self._compute_samples(self.validation_set, U)
                     else:
                         number_validation_snapshots = int(len(self.training_data)*self.validation_ratio)
                         self.validation_data = self.training_data[0:number_validation_snapshots]
@@ -188,7 +188,8 @@ if config.HAVE_TORCH:
         def _build_rom(self):
             """Construct the reduced order model."""
             with self.logger.block('Building ROM ...'):
-                rom = NeuralNetworkModel(self.neural_network, self.fom.parameters, name=f'{self.fom.name}_reduced')
+                rom = NeuralNetworkModel(self.neural_network, self.fom.parameters,
+                                         name=f'{self.fom.name}_reduced')
 
             return rom
 
@@ -296,22 +297,22 @@ if config.HAVE_TORCH:
                                            atol=self.atol / 2., l2_err=self.l2_err / 2.,
                                            **(self.pod_params or {}))
 
+                self.reduced_basis = reduced_basis
+
                 # determine the coefficients of the full-order solutions in the reduced basis to obtain the
                 # training data; convert everything into tensors that are compatible with PyTorch
-                self.training_data = self._compute_samples(self.training_set, U, reduced_basis)
+                self.training_data = self._compute_samples(self.training_set, U)
 
             # compute mean square loss
-            mean_square_loss = (sum(U.norm2()) - sum(svals**2)) / len(U)
-
-            return reduced_basis, mean_square_loss
+            self.mse_basis = (sum(U.norm2()) - sum(svals**2)) / len(U)
 
 
-        def _compute_samples(self, parameters, solutions, reduced_basis):
+        def _compute_samples(self, parameters, solutions):
             """Transform parameters and corresponding solutions to tensors."""
             samples = []
             for mu, u in zip(parameters, solutions):
                 mu_tensor = torch.DoubleTensor(mu.to_numpy())
-                u_tensor = torch.DoubleTensor(reduced_basis.inner(u)[:,0])
+                u_tensor = torch.DoubleTensor(self.reduced_basis.inner(u)[:,0])
                 samples.append((mu_tensor, u_tensor))
             return samples
 
@@ -392,7 +393,7 @@ if config.HAVE_TORCH:
             return rom
 
 
-        def _compute_samples(self, parameters, solutions, reduced_basis):
+        def _compute_samples(self, parameters, solutions):
             """Transform parameters and corresponding solutions to tensors
             (make sure to include the time instances in the inputs)."""
             samples = []
@@ -407,9 +408,71 @@ if config.HAVE_TORCH:
 
             for mu, u in zip(parameters_with_time, solutions):
                 mu_tensor = torch.DoubleTensor(mu.to_numpy())
-                u_tensor = torch.DoubleTensor(reduced_basis.inner(u)[:,0])
+                u_tensor = torch.DoubleTensor(self.reduced_basis.inner(u)[:,0])
                 samples.append((mu_tensor, u_tensor))
 
+            return samples
+
+
+    class NeuralNetworkOutputReductor(NeuralNetworkReductor):
+        """Reduced Basis reductor for stationary problems relying on
+        artificial neural networks.
+
+        This is a reductor that trains a neural network that approximates
+        the mapping from parameter space to output space.
+
+        Parameters
+        ----------
+        fom
+            The full-order |Model| to reduce.
+        training_set
+            Set of |parameter values| to use for POD and training of the
+            neural network.
+        validation_set
+            Set of |parameter values| to use for validation in the training
+            of the neural network.
+        validation_ratio
+            Fraction of the training set to use for validation in the training
+            of the neural network (only used if no validation set is provided).
+        """
+
+        def __init__(self, fom, training_set, validation_set=None, validation_ratio=0.1):
+            assert 0 < validation_ratio < 1 or validation_set
+            self.ann_mse = None
+            self.__auto_init(locals())
+
+
+        def build_basis(self):
+            U = self.fom.solution_space.empty()
+            for mu in self.training_set:
+                U.append(self.fom.solve(mu))
+            self.training_data = self._compute_samples(self.training_set, U)
+            self.reduced_basis = ()
+
+
+        def _compute_layers_sizes(self, hidden_layers):
+            """Compute the number of neurons in the layers of the neural network
+            (make sure to increase the input dimension to account for the time)."""
+            return [len(self.fom.parameters),] + hidden_layers + [self.fom.output_space.dim,]
+
+
+        def _build_rom(self):
+            """Construct the reduced order model."""
+            with self.logger.block('Building ROM ...'):
+                rom = NeuralNetworkModel(self.neural_network, self.fom.parameters,
+                                         name=f'{self.fom.name}_reduced')
+
+            return rom
+
+
+        def _compute_samples(self, parameters, solutions):
+            """Transform parameters and corresponding solutions to tensors
+            (make sure to include the time instances in the inputs)."""
+            samples = []
+            for mu, u in zip(parameters, solutions):
+                mu_tensor = torch.DoubleTensor(mu.to_numpy())
+                u_tensor = torch.DoubleTensor(self.fom.output_functional.apply(u, mu).to_numpy()[:,0])
+                samples.append((mu_tensor, u_tensor))
             return samples
 
 
