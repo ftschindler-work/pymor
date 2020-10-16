@@ -16,7 +16,10 @@ if config.HAVE_TORCH:
     from pymor.algorithms.pod import pod
     from pymor.core.base import BasicObject
     from pymor.core.exceptions import NeuralNetworkTrainingFailed
-    from pymor.models.neural_network import FullyConnectedNN, NeuralNetworkModel, NeuralNetworkInstationaryModel
+    from pymor.models.neural_network import (FullyConnectedNN,
+                                             NeuralNetworkModel,
+                                             NeuralNetworkInstationaryModel,
+                                             NeuralNetworkOutputModel)
 
 
     class NeuralNetworkReductor(BasicObject):
@@ -459,8 +462,9 @@ if config.HAVE_TORCH:
         def _build_rom(self):
             """Construct the reduced order model."""
             with self.logger.block('Building ROM ...'):
-                rom = NeuralNetworkModel(self.neural_network, self.fom.parameters,
-                                         name=f'{self.fom.name}_reduced')
+                rom = NeuralNetworkOutputModel(self.neural_network, self.fom.parameters,
+                                               output_functional=self.fom.output_functional,
+                                               name=f'{self.fom.name}_output_reduced')
 
             return rom
 

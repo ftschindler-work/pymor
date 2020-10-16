@@ -115,7 +115,7 @@ def neural_networks_demo(args):
         time_fom = time.time() - tic
 
         tic = time.time()
-        U_red.append(rom.solve(mu))
+        U_red.append(rom.compute(output=True, mu=mu)['output'])
         time_red = time.time() - tic
 
         speedups.append(time_fom / time_red)
