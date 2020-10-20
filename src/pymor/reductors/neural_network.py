@@ -8,6 +8,8 @@ from pymor.core.config import config
 if config.HAVE_TORCH:
     from numbers import Number
 
+    import numpy as np
+
     import torch
     import torch.nn as nn
     import torch.optim as optim
@@ -16,10 +18,92 @@ if config.HAVE_TORCH:
     from pymor.algorithms.pod import pod
     from pymor.core.base import BasicObject
     from pymor.core.exceptions import NeuralNetworkTrainingFailed
-    from pymor.models.neural_network import (FullyConnectedNN,
-                                             NeuralNetworkModel,
-                                             NeuralNetworkInstationaryModel,
-                                             NeuralNetworkOutputModel)
+    from pymor.algorithms.neural_network import (
+            FullyConnectedNN, EarlyStoppingScheduler, CustomDataset, certified_ann_training)
+    from pymor.models.neural_network import (
+            StationaryNeuralNetworkModel, NeuralNetworkModel, NeuralNetworkInstationaryModel, NeuralNetworkOutputModel)
+    from pymor.parameters.base import Mu
+    from pymor.reductors.basic import StationaryRBReductor
+    from pymor.vectorarrays.interface import VectorArray
+
+
+    class StationaryNeuralNetworkRBReductor(StationaryRBReductor):
+        '''
+        assumes RB to be orthogonal w.r.t. product
+        '''
+
+        def __init__(self, fom, training_data, validation_data,
+                RB=None, product=None, check_orthonormality=None, check_tol=None,
+                hidden_layers='[(N+P)*3, (N+P)*3]', ann_mse='like_basis',
+                max_restarts=10, torch_seed=None, ann_train_params=None):
+
+            super().__init__(fom, RB=RB, product=product,
+                    check_orthonormality=check_orthonormality, check_tol=check_tol)
+
+            # check that training and validation data is a tuple (mus, snapshots) of a list/tuple
+            # of mus and a VectorArray of snaphots, where snapshots[i] == fom.solve(mu[i]) is assumed
+            for data in training_data, validation_data:
+                assert isinstance(data, (list, tuple)) and len(data) == 2
+                assert isinstance(data[0], (list, tuple))
+                assert isinstance(data[1], VectorArray)
+                assert len(data[0]) == len(data[1])
+                assert all(isinstance(mu, Mu) for mu in data[0])
+                assert data[1].space == fom.solution_space
+
+            assert isinstance(ann_mse, Number) or (isinstance(ann_mse, str) and ann_mse == 'like_basis') or not ann_mse
+
+            # if applicable, set a common seed for the PyTorch initialization
+            # of weights and biases and further PyTorch methods for all training runs ...
+            ann_train_params = ann_train_params or {}
+            assert isinstance(ann_train_params, dict)
+            if not torch_seed and 'seed' in ann_train_params:
+                torch_seed = ann_train_params['seed']
+            ann_train_params.pop('seed', None) # has to be removed, otherwise each training uses the same
+            if torch_seed:
+                torch.manual_seed(torch_seed)
+
+            self.__auto_init(locals())
+
+        def build_rom(self, projected_operators, error_estimator):
+            assert not error_estimator, 'Did not think about this yet!'
+
+            RB = self.bases['RB']
+
+            # determine the numbers of neurons in the hidden layers
+            if isinstance(self.hidden_layers, str):
+                hidden_layers = eval(self.hidden_layers, {'N': len(RB), 'P': self.fom.parameters.dim})
+            else:
+                hidden_layers = self.hidden_layers
+            assert isinstance(hidden_layers, (list, tuple)) and len(hidden_layers) == 2
+            assert all(isinstance(l, Number) for l in hidden_layers)
+            layers = [len(self.fom.parameters),] + hidden_layers + [len(RB),]
+
+            # perform orthogonal projection of training and validation snapshots onto current basis
+            def data_to_tensor(data):
+                assert len(data[0]) == len(data[1])
+                orth_projs = RB.inner(data[1], product=self.product)
+                return [(torch.DoubleTensor(data[0][i].to_numpy()), torch.DoubleTensor(orth_projs[:, i]))
+                        for i in np.arange(len(data[0]))]
+            training_data = data_to_tensor(self.training_data)
+            validation_data = data_to_tensor(self.validation_data)
+
+            # compute desired loss
+            if isinstance(self.ann_mse, str) and self.ann_mse == 'like_basis':
+                # compute orthogonal projection error of training snapshots onto current basis
+                V = self.training_data[1]
+                v = RB.inner(V, product=self.product)
+                V_proj = RB.lincomb(v.T)
+                ann_mse = np.max((V - V_proj).norm(product=self.product))
+            else:
+                ann_mse = self.ann_mse
+
+            # run the actual training of the neural network
+            self.neural_network, self.losses = certified_ann_training(
+                    training_data, validation_data, layers, target_loss=ann_mse, max_restarts=self.max_restarts,
+                    **self.ann_train_params)
+
+            # create model
+            return StationaryNeuralNetworkModel(self.neural_network, error_estimator=None, **projected_operators)
 
 
     class NeuralNetworkReductor(BasicObject):
@@ -479,83 +563,3 @@ if config.HAVE_TORCH:
                 samples.append((mu_tensor, u_tensor))
             return samples
 
-
-    class EarlyStoppingScheduler(BasicObject):
-        """Class for performing early stopping in training of neural networks.
-
-        If the validation loss does not decrease over a certain amount of epochs, the
-        training should be aborted to avoid overfitting the training data.
-        This class implements an early stopping scheduler that recommends to stop the
-        training process if the validation loss did not decrease by at least `delta`
-        over `patience` epochs.
-
-        Parameters
-        ----------
-        size_training_validation_set
-            Size of both, training and validation set together.
-        patience
-            Number of epochs of non-decreasing validation loss allowed, before early
-            stopping the training process.
-        delta
-            Minimal amount of decrease in the validation loss that is required to reset
-            the counter of non-decreasing epochs.
-        """
-
-        def __init__(self, size_training_validation_set, patience=10, delta=0.):
-            self.__auto_init(locals())
-
-            self.best_losses = None
-            self.best_neural_network = None
-            self.counter = 0
-
-        def __call__(self, losses, neural_network=None):
-            """Returns `True` if early stopping of training is suggested.
-
-            Parameters
-            ----------
-            losses
-                Dictionary of losses on the validation and the training set in
-                the current epoch.
-            neural_network
-                Neural network that produces the current validation loss.
-
-            Returns
-            -------
-            `True` if early stopping is suggested, `False` otherwise.
-            """
-            if self.best_losses is None:
-                self.best_losses = losses
-                self.best_losses['full'] /= self.size_training_validation_set
-                self.best_neural_network = neural_network
-            elif self.best_losses['val'] - self.delta <= losses['val']:
-                self.counter += 1
-                if self.counter >= self.patience:
-                    return True
-            else:
-                self.best_losses = losses
-                self.best_losses['full'] /= self.size_training_validation_set
-                self.best_neural_network = neural_network
-                self.counter = 0
-
-            return False
-
-
-    class CustomDataset(utils.data.Dataset):
-        """Class that represents the dataset to use in PyTorch.
-
-        Parameters
-        ----------
-        training_data
-            Set of training parameters and the respective coefficients of the
-            solution in the reduced basis.
-        """
-
-        def __init__(self, training_data):
-            self.training_data = training_data
-
-        def __len__(self):
-            return len(self.training_data)
-
-        def __getitem__(self, idx):
-            t = self.training_data[idx]
-            return t
