@@ -58,14 +58,25 @@ def neural_networks_demo(args):
 
     parameter_space = fom.parameters.space((0.1, 1))
 
-    from pymor.reductors.neural_network import NeuralNetworkReductor
+    from pymor.reductors.neural_network import StationaryNeuralNetworkRBReductor
 
     training_set = parameter_space.sample_uniformly(int(args['TRAINING_SAMPLES']))
-    validation_set = parameter_space.sample_randomly(int(args['VALIDATION_SAMPLES']))
+    training_snapshots = fom.solution_space.empty()
+    for mu in training_set:
+        training_snapshots.append(fom.solve(mu))
+    training_data = (training_set, training_snapshots)
 
-    reductor = NeuralNetworkReductor(fom, training_set, validation_set, l2_err=1e-5,
-                                     ann_mse=1e-5)
-    rom = reductor.reduce(restarts=100)
+    RB, _ = pod(training_snapshots, l2_err=1e-5/2)
+
+    validation_set = parameter_space.sample_randomly(int(args['VALIDATION_SAMPLES']))
+    validation_snapshots = fom.solution_space.empty()
+    for mu in validation_set:
+        validation_snapshots.append(fom.solve(mu))
+    validation_data = (validation_set, validation_snapshots)
+
+    reductor = StationaryNeuralNetworkRBReductor(fom, training_data, validation_data, RB,
+            ann_mse=1e-5, max_restarts=100)
+    rom = reductor.reduce()
 
     test_set = parameter_space.sample_randomly(10)
 
