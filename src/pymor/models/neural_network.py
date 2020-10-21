@@ -38,6 +38,33 @@ if config.HAVE_TORCH:
             return self.solution_space.make_array(U)
 
 
+    class StationaryNeuralNetworkOutputModel(Model):
+
+        def __init__(self, parameters, neural_network, linear=False, name=None):
+
+            super().__init__(name=name)
+
+            self.solution_space = NumpyVectorSpace(0)
+            self.output_space = NumpyVectorSpace(neural_network.output_dimension)
+
+            self.__auto_init(locals())
+
+            self.disable_logging() # otherwise we get the "Solving ..." output
+
+        def _compute_solution(self, mu=None, **kwargs):
+
+            return self.solution_space.empty()
+
+        def _compute_output(self, solution, mu=None, **kwargs):
+
+            # convert the parameter `mu` into a form that is usable in PyTorch
+            converted_input = torch.from_numpy(mu.to_numpy()).double()
+            # obtain output by forward pass of the parameter values through the neural network
+            output = self.neural_network(converted_input).data.numpy()
+            # convert plain numpy array to element of the actual output space
+            return self.output_space.make_array(output)
+
+
     class NeuralNetworkModel(Model):
         """Class for models of stationary problems that use artificial neural networks.
 

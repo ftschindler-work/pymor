@@ -21,7 +21,8 @@ if config.HAVE_TORCH:
     from pymor.algorithms.neural_network import (
             FullyConnectedNN, EarlyStoppingScheduler, CustomDataset, certified_ann_training)
     from pymor.models.neural_network import (
-            StationaryNeuralNetworkModel, NeuralNetworkModel, NeuralNetworkInstationaryModel, NeuralNetworkOutputModel)
+            StationaryNeuralNetworkModel, StationaryNeuralNetworkOutputModel,
+            NeuralNetworkModel, NeuralNetworkInstationaryModel)
     from pymor.parameters.base import Mu
     from pymor.reductors.basic import StationaryRBReductor
     from pymor.vectorarrays.interface import VectorArray
@@ -104,6 +105,70 @@ if config.HAVE_TORCH:
 
             # create model
             return StationaryNeuralNetworkModel(self.neural_network, error_estimator=None, **projected_operators)
+
+
+    class StationaryNeuralNetworkOutputReductor(BasicObject):
+
+        # TODO: allow for transformation/back_transformation of outputs (and inputs?)!
+        def __init__(self, fom, training_data, validation_data,
+                     hidden_layers='[P*3, P*3]', ann_mse=None, max_restarts=10, torch_seed=None, ann_train_params=None):
+
+            assert fom.parameters and len(np.sum(fom.parameters.values())) > 0
+
+            # check that training and validation data is a tuple (mus, outputs) of a list/tuple
+            # of mus and a VectorArray of outputs, where outputs[i] == fom.output(mu[i]) is assumed
+            for data in training_data, validation_data:
+                assert isinstance(data, (list, tuple)) and len(data) == 2
+                assert isinstance(data[0], (list, tuple))
+                assert isinstance(data[1], VectorArray)
+                assert len(data[0]) == len(data[1])
+                assert all(isinstance(mu, Mu) for mu in data[0])
+                assert data[1].space == fom.output_space
+
+            assert isinstance(ann_mse, Number) or not ann_mse
+
+            # if applicable, set a common seed for the PyTorch initialization
+            # of weights and biases and further PyTorch methods for all training runs ...
+            ann_train_params = ann_train_params or {}
+            assert isinstance(ann_train_params, dict)
+            if not torch_seed and 'seed' in ann_train_params:
+                torch_seed = ann_train_params['seed']
+            ann_train_params.pop('seed', None) # has to be removed, otherwise each training uses the same
+            if torch_seed:
+                torch.manual_seed(torch_seed)
+
+            # determine the numbers of neurons in the hidden layers
+            if isinstance(hidden_layers, str):
+                hidden_layers = eval(hidden_layers, {'P': fom.parameters.dim})
+            else:
+                hidden_layers = self.hidden_layers
+            assert isinstance(hidden_layers, (list, tuple)) and len(hidden_layers) == 2
+            assert all(isinstance(l, Number) for l in hidden_layers)
+            self.layers = [len(fom.parameters),] + hidden_layers + [fom.output_space.dim,]
+
+            self.__auto_init(locals())
+
+        def reduce(self):
+
+            if hasattr(self, 'rom'):
+                return self.rom
+
+            def data_to_tensor(data):
+                assert len(data[0]) == len(data[1])
+                return [(torch.DoubleTensor(mu.to_numpy()), torch.DoubleTensor(output.to_numpy()))
+                        for mu, output in zip(data[0], data[1])]
+            training_data = data_to_tensor(self.training_data)
+            validation_data = data_to_tensor(self.validation_data)
+
+            # run the actual training of the neural network
+            self.neural_network, self.losses = certified_ann_training(
+                    training_data, validation_data, self.layers, target_loss=self.ann_mse,
+                    max_restarts=self.max_restarts, **self.ann_train_params)
+
+            # create model
+            self.rom = StationaryNeuralNetworkOutputModel(
+                    self.fom.parameters, self.neural_network, linear=self.fom.linear, name=f'{self.fom.name}_reduced')
+            return self.rom
 
 
     class NeuralNetworkReductor(BasicObject):
