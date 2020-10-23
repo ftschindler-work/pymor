@@ -13,12 +13,13 @@ if config.HAVE_TORCH:
     import torch.utils as utils
 
     from pymor.core.base import BasicObject
+    from pymor.core.exceptions import NeuralNetworkTrainingFailed
     from pymor.core.logger import getLogger
 
 
     def train_ann(training_data, validation_data, layers,
-            activation_function=torch.tanh, optimizer=optim.LBFGS,
-            epochs=1000, batch_size=20, learning_rate=1., seed=None):
+                  activation_function=torch.tanh, optimizer=optim.LBFGS,
+                  epochs=1000, batch_size=20, learning_rate=1., seed=None):
 
         logger = getLogger('pymor.algorithms.neural_network.train_ann')
 
@@ -113,14 +114,10 @@ if config.HAVE_TORCH:
                     return early_stopping_scheduler.best_neural_network, early_stopping_scheduler.best_losses
 
 
-    def certified_ann_training(training_data, validation_data, layers, target_loss=None, max_restarts=10, seed=None,
+    def restarted_ann_training(training_data, validation_data, layers, target_loss=None, max_restarts=10, seed=None,
                                train_ann_params=None):
-        '''
-        Felix: I am not sure about this name yet (certified in RB community == rom and training with error estimator);
-        so train_certified_ann would definitely be wrong, but certified_ann_training might do.
-        '''
 
-        logger = getLogger('pymor.algorithms.neural_network.certified_ann_training')
+        logger = getLogger('pymor.algorithms.neural_network.restarted_ann_training')
 
         # if applicable, set a common seed for the PyTorch initialization
         # of weights and biases and further PyTorch methods for all training runs ...
@@ -132,7 +129,12 @@ if config.HAVE_TORCH:
         if seed:
             torch.manual_seed(seed)
 
-        logger.info(f'Performing up to {max_restarts} restart{"s" if max_restarts > 1 else ""} for training')
+        if target_loss:
+            logger.info(f'Performing up to {max_restarts} restart{"s" if max_restarts > 1 else ""} to train an ANN '
+                        f'with a loss below {target_loss}')
+        else:
+            logger.info(f'Performing up to {max_restarts} restart{"s" if max_restarts > 1 else ""} to find the ANN '
+                        'with the lowest loss')
 
         with logger.block('Training ANN #0 ...'):
             neural_network, losses = train_ann(training_data, validation_data, layers, **train_ann_params)
@@ -155,10 +157,9 @@ if config.HAVE_TORCH:
                 logger.info(f'Rejecting ANN with loss of {current_losses["val"]} (instead of {losses["val"]})')
 
         if target_loss:
-            logger.info(f'Could not find ANN with prescribed loss of {target_loss}, returning ANN with smallest '
-                        f'validation error of {losses["val"]}')
-        else:
-            logger.info(f'Found ANN with validation error of {losses["val"]}')
+            raise NeuralNetworkTrainingFailed(f'Could not find ANN with prescribed loss of {target_loss} '
+                                              f'(best one found was {losses["val"]})!')
+        logger.info(f'Found ANN with validation error of {losses["val"]}')
         return neural_network, losses
 
 
