@@ -47,14 +47,14 @@ def create_fom(args):
     discretizer = discretize_stationary_fv if args['--fv'] else discretize_stationary_cg
     fom, _ = discretizer(problem, diameter=1. / int(args['GRID_INTERVALS']))
 
-    return fom
+    return fom, fom.l2_product if args['--fv'] else fom.h1_product
 
 
 def neural_networks_demo(args):
     if not config.HAVE_TORCH:
         raise TorchMissing()
 
-    fom = create_fom(args)
+    fom, product = create_fom(args)
 
     parameter_space = fom.parameters.space((0.1, 1))
 
@@ -66,7 +66,9 @@ def neural_networks_demo(args):
         training_snapshots.append(fom.solve(mu))
     training_data = (training_set, training_snapshots)
 
-    RB, _ = pod(training_snapshots, l2_err=1e-5/2)
+    desired_MSE = 1e-5
+    desired_l2_err = np.sqrt(len(training_set)*desired_MSE)
+    RB, _ = pod(training_snapshots, product=product, l2_err=desired_l2_err)
 
     validation_set = parameter_space.sample_randomly(int(args['VALIDATION_SAMPLES']))
     validation_snapshots = fom.solution_space.empty()
@@ -74,8 +76,9 @@ def neural_networks_demo(args):
         validation_snapshots.append(fom.solve(mu))
     validation_data = (validation_set, validation_snapshots)
 
-    reductor = StationaryNeuralNetworkRBReductor(fom, training_data, validation_data, RB,
-            ann_mse=1e-5, max_restarts=100)
+    reductor = StationaryNeuralNetworkRBReductor(
+            fom, training_data, validation_data, RB=RB, product=product,
+            ann_mse=desired_MSE, max_restarts=100, torch_seed=42)
     rom = reductor.reduce()
 
     test_set = parameter_space.sample_randomly(10)
@@ -100,8 +103,8 @@ def neural_networks_demo(args):
 
         speedups.append(time_fom / time_red)
 
-    absolute_errors = (U - U_red).norm()
-    relative_errors = (U - U_red).norm() / U.norm()
+    absolute_errors = (U - U_red).norm(product)
+    relative_errors = (U - U_red).norm(product) / U.norm(product)
 
     if args['--vis']:
         fom.visualize((U, U_red),
