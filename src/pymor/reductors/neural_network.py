@@ -19,7 +19,7 @@ if config.HAVE_TORCH:
     from pymor.core.base import BasicObject
     from pymor.core.exceptions import NeuralNetworkTrainingFailed
     from pymor.algorithms.neural_network import (
-            FullyConnectedNN, EarlyStoppingScheduler, CustomDataset, certified_ann_training)
+            FullyConnectedNN, EarlyStoppingScheduler, CustomDataset, restarted_ann_training)
     from pymor.models.neural_network import (
             StationaryNeuralNetworkModel, StationaryNeuralNetworkOutputModel,
             NeuralNetworkModel, NeuralNetworkInstationaryModel)
@@ -51,7 +51,7 @@ if config.HAVE_TORCH:
                 assert all(isinstance(mu, Mu) for mu in data[0])
                 assert data[1].space == fom.solution_space
 
-            assert isinstance(ann_mse, Number) or (isinstance(ann_mse, str) and ann_mse == 'like_basis') or not ann_mse
+            assert isinstance(ann_mse, Number) or (isinstance(ann_mse, str) and 'like_basis' in ann_mse) or not ann_mse
 
             # if applicable, set a common seed for the PyTorch initialization
             # of weights and biases and further PyTorch methods for all training runs ...
@@ -75,8 +75,8 @@ if config.HAVE_TORCH:
                 hidden_layers = eval(self.hidden_layers, {'N': len(RB), 'P': self.fom.parameters.dim})
             else:
                 hidden_layers = self.hidden_layers
-            assert isinstance(hidden_layers, (list, tuple)) and len(hidden_layers) == 2
-            assert all(isinstance(l, Number) for l in hidden_layers)
+            assert isinstance(hidden_layers, list)
+            assert len(hidden_layers) == 0 or all(isinstance(l, Number) for l in hidden_layers)
             layers = [len(self.fom.parameters),] + hidden_layers + [len(RB),]
 
             # perform orthogonal projection of training and validation snapshots onto current basis
@@ -89,19 +89,27 @@ if config.HAVE_TORCH:
             validation_data = data_to_tensor(self.validation_data)
 
             # compute desired loss
-            if isinstance(self.ann_mse, str) and self.ann_mse == 'like_basis':
+            if isinstance(self.ann_mse, str):
+                assert 'like_basis' in self.ann_mse
                 # compute orthogonal projection error of training snapshots onto current basis
                 V = self.training_data[1]
                 v = RB.inner(V, product=self.product)
                 V_proj = RB.lincomb(v.T)
-                ann_mse = np.max((V - V_proj).norm(product=self.product))
+                ann_mse = np.sum((V - V_proj).norm(product=self.product)**2) / len(V)
+                ann_mse = eval(self.ann_mse, {'np': np, 'like_basis': ann_mse})
             else:
                 ann_mse = self.ann_mse
 
             # run the actual training of the neural network
-            self.neural_network, self.losses = certified_ann_training(
-                    training_data, validation_data, layers, target_loss=ann_mse, max_restarts=self.max_restarts,
-                    **self.ann_train_params)
+            try:
+                self.neural_network, self.losses = restarted_ann_training(
+                        training_data, validation_data, layers, target_loss=ann_mse, max_restarts=self.max_restarts,
+                        **self.ann_train_params)
+            except NeuralNetworkTrainingFailed as e:
+                self.logger.error('Could not train a neural network with an error as small as the '
+                                  'reduced basis error! Maybe you can try a different neural '
+                                  'network architecture or change the value of `ann_mse`.')
+                raise e
 
             # create model
             return StationaryNeuralNetworkModel(self.neural_network, error_estimator=None, **projected_operators)
@@ -111,7 +119,7 @@ if config.HAVE_TORCH:
 
         # TODO: allow for transformation/back_transformation of outputs (and inputs?)!
         def __init__(self, fom, training_data, validation_data,
-                     hidden_layers='[P*3, P*3]', ann_mse=None, max_restarts=10, torch_seed=None, ann_train_params=None):
+                     hidden_layers='[(O+P)*3, (O+P)*3]', ann_mse=None, max_restarts=10, torch_seed=None, ann_train_params=None):
 
             assert fom.parameters and len(np.sum(fom.parameters.values())) > 0
 
@@ -139,11 +147,9 @@ if config.HAVE_TORCH:
 
             # determine the numbers of neurons in the hidden layers
             if isinstance(hidden_layers, str):
-                hidden_layers = eval(hidden_layers, {'P': fom.parameters.dim})
-            else:
-                hidden_layers = self.hidden_layers
-            assert isinstance(hidden_layers, (list, tuple)) and len(hidden_layers) == 2
-            assert all(isinstance(l, Number) for l in hidden_layers)
+                hidden_layers = eval(hidden_layers, {'O': fom.output_space.dim, 'P': fom.parameters.dim})
+            assert isinstance(hidden_layers, list)
+            assert len(hidden_layers) == 0 or all(isinstance(l, Number) for l in hidden_layers)
             self.layers = [len(fom.parameters),] + hidden_layers + [fom.output_space.dim,]
 
             self.__auto_init(locals())
@@ -161,7 +167,7 @@ if config.HAVE_TORCH:
             validation_data = data_to_tensor(self.validation_data)
 
             # run the actual training of the neural network
-            self.neural_network, self.losses = certified_ann_training(
+            self.neural_network, self.losses = restarted_ann_training(
                     training_data, validation_data, self.layers, target_loss=self.ann_mse,
                     max_restarts=self.max_restarts, **self.ann_train_params)
 
